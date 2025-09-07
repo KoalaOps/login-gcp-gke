@@ -1,0 +1,140 @@
+name: 'Login to GCP GKE'
+description: 'Authenticates to GCP, configures GKE kubeconfig, and logs into GAR'
+author: 'KoalaOps'
+
+branding:
+  icon: 'lock'
+  color: 'purple'
+
+inputs:
+  credentials_json:
+    description: 'GCP Service Account JSON credentials'
+    required: false
+  workload_identity_provider:
+    description: 'Workload Identity Provider (for OIDC)'
+    required: false
+  service_account:
+    description: 'Service Account email (for OIDC)'
+    required: false
+  project_id:
+    description: 'GCP Project ID'
+    required: true
+  location:
+    description: 'GKE cluster location (region or zone)'
+    required: true
+  cluster_name:
+    description: 'GKE cluster name'
+    required: true
+  gar_location:
+    description: 'Google Artifact Registry location (defaults to cluster location)'
+    required: false
+  skip_gar_login:
+    description: 'Skip Google Artifact Registry login'
+    required: false
+    default: 'false'
+
+outputs:
+  project_id:
+    description: 'GCP Project ID'
+    value: ${{ inputs.project_id }}
+  gar_registry:
+    description: 'Google Artifact Registry URL'
+    value: ${{ steps.gcp-config.outputs.gar_registry }}
+  kubectl_context:
+    description: 'Kubectl context name'
+    value: ${{ steps.gke-config.outputs.context }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ inputs.credentials_json }}
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+        project_id: ${{ inputs.project_id }}
+    
+    - name: Setup Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ inputs.project_id }}
+    
+    - name: Get GCP Configuration
+      id: gcp-config
+      shell: bash
+      run: |
+        # Determine GAR registry location
+        if [ -n "${{ inputs.gar_location }}" ]; then
+          GAR_LOCATION="${{ inputs.gar_location }}"
+        else
+          GAR_LOCATION="${{ inputs.location }}"
+        fi
+        
+        # Determine registry hostname based on location
+        if [[ "$GAR_LOCATION" == us-* ]]; then
+          GAR_REGISTRY="us-docker.pkg.dev"
+        elif [[ "$GAR_LOCATION" == europe-* ]]; then
+          GAR_REGISTRY="europe-docker.pkg.dev"
+        elif [[ "$GAR_LOCATION" == asia-* ]]; then
+          GAR_REGISTRY="asia-docker.pkg.dev"
+        else
+          GAR_REGISTRY="${GAR_LOCATION}-docker.pkg.dev"
+        fi
+        
+        FULL_REGISTRY="${GAR_REGISTRY}/${{ inputs.project_id }}"
+        echo "gar_registry=$FULL_REGISTRY" >> $GITHUB_OUTPUT
+        echo "GAR_REGISTRY=$FULL_REGISTRY" >> $GITHUB_ENV
+        
+        echo "📋 GCP Configuration:"
+        echo "  Project ID: ${{ inputs.project_id }}"
+        echo "  Location: ${{ inputs.location }}"
+        echo "  GAR Registry: $FULL_REGISTRY"
+    
+    - name: Configure Docker for Artifact Registry
+      if: inputs.skip_gar_login != 'true'
+      shell: bash
+      run: |
+        echo "🔐 Configuring Docker for Google Artifact Registry..."
+        
+        # Get the registry hostname
+        REGISTRY_HOST=$(echo "$GAR_REGISTRY" | cut -d'/' -f1)
+        
+        # Configure docker authentication
+        gcloud auth configure-docker "$REGISTRY_HOST" --quiet
+        
+        echo "✅ Docker configured for registry: $REGISTRY_HOST"
+    
+    - name: Get GKE credentials
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: ${{ inputs.cluster_name }}
+        location: ${{ inputs.location }}
+        project_id: ${{ inputs.project_id }}
+    
+    - name: Configure kubectl for GKE
+      id: gke-config
+      shell: bash
+      run: |
+        echo "🔧 Configuring kubectl for GKE cluster: ${{ inputs.cluster_name }}"
+        
+        # Get the context name (GKE format)
+        CONTEXT="gke_${{ inputs.project_id }}_${{ inputs.location }}_${{ inputs.cluster_name }}"
+        echo "context=$CONTEXT" >> $GITHUB_OUTPUT
+        
+        # Set as current context
+        kubectl config use-context "$CONTEXT"
+        
+        # Verify connection
+        echo "✅ Testing cluster connection..."
+        kubectl cluster-info
+        
+        # Get cluster version
+        CLUSTER_VERSION=$(kubectl version --short 2>/dev/null | grep "Server Version" || echo "Unknown")
+        echo "  Cluster version: $CLUSTER_VERSION"
+        
+        # List namespaces to verify access
+        echo "📋 Available namespaces:"
+        kubectl get namespaces --no-headers | head -5
+        
+        echo "✅ Successfully configured kubectl for GKE cluster: ${{ inputs.cluster_name }}"
