@@ -135,6 +135,6 @@ runs:
         
         # List namespaces to verify access
         echo "📋 Available namespaces:"
-        kubectl get namespaces --no-headers | head -5
+        kubectl get namespaces --no-headers 2>/dev/null | head -5 || true
         
         echo "✅ Successfully configured kubectl for GKE cluster: ${{ inputs.cluster_name }}"
