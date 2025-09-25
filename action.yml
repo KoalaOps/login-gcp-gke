@@ -24,7 +24,7 @@ inputs:
     required: true
   cluster_name:
     description: 'GKE cluster name'
-    required: true
+    required: false
   gar_location:
     description: 'Google Artifact Registry location (defaults to cluster location)'
     required: false
@@ -71,16 +71,8 @@ runs:
           GAR_LOCATION="${{ inputs.location }}"
         fi
         
-        # Determine registry hostname based on location
-        if [[ "$GAR_LOCATION" == us-* ]]; then
-          GAR_REGISTRY="us-docker.pkg.dev"
-        elif [[ "$GAR_LOCATION" == europe-* ]]; then
-          GAR_REGISTRY="europe-docker.pkg.dev"
-        elif [[ "$GAR_LOCATION" == asia-* ]]; then
-          GAR_REGISTRY="asia-docker.pkg.dev"
-        else
-          GAR_REGISTRY="${GAR_LOCATION}-docker.pkg.dev"
-        fi
+        # Always use location-specific endpoint (works for both multi-regional and regional)
+        GAR_REGISTRY="${GAR_LOCATION}-docker.pkg.dev"
         
         FULL_REGISTRY="${GAR_REGISTRY}/${{ inputs.project_id }}"
         echo "gar_registry=$FULL_REGISTRY" >> $GITHUB_OUTPUT
@@ -106,13 +98,15 @@ runs:
         echo "✅ Docker configured for registry: $REGISTRY_HOST"
     
     - name: Get GKE credentials
+      if: inputs.cluster_name != ''
       uses: google-github-actions/get-gke-credentials@v2
       with:
         cluster_name: ${{ inputs.cluster_name }}
         location: ${{ inputs.location }}
         project_id: ${{ inputs.project_id }}
-    
+
     - name: Configure kubectl for GKE
+      if: inputs.cluster_name != ''
       id: gke-config
       shell: bash
       run: |
