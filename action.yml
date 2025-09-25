@@ -40,6 +40,9 @@ outputs:
   gar_registry:
     description: 'Google Artifact Registry URL'
     value: ${{ steps.gcp-config.outputs.gar_registry }}
+  gar_logged_in:
+    description: 'Whether GAR login was performed'
+    value: ${{ steps.gar-status.outputs.logged_in }}
   kubectl_context:
     description: 'Kubectl context name'
     value: ${{ steps.gke-config.outputs.context }}
@@ -84,18 +87,27 @@ runs:
         echo "  GAR Registry: $FULL_REGISTRY"
     
     - name: Configure Docker for Artifact Registry
+      id: gar-status
       if: inputs.skip_gar_login != 'true'
       shell: bash
       run: |
         echo "🔐 Configuring Docker for Google Artifact Registry..."
-        
+
         # Get the registry hostname
         REGISTRY_HOST=$(echo "$GAR_REGISTRY" | cut -d'/' -f1)
-        
+
         # Configure docker authentication
         gcloud auth configure-docker "$REGISTRY_HOST" --quiet
-        
+
         echo "✅ Docker configured for registry: $REGISTRY_HOST"
+        echo "logged_in=true" >> $GITHUB_OUTPUT
+
+    - name: Set GAR not logged in
+      id: gar-status-false
+      if: inputs.skip_gar_login == 'true'
+      shell: bash
+      run: |
+        echo "logged_in=false" >> $GITHUB_OUTPUT
     
     - name: Get GKE credentials
       if: inputs.cluster_name != ''

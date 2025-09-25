@@ -43,8 +43,9 @@ Authenticates to Google Cloud Platform and configures kubectl for GKE clusters.
 | Output | Description |
 |--------|-------------|
 | `project_id` | GCP project ID |
-| `kubectl_context` | Kubernetes context name |
 | `gar_registry` | GAR registry URL if configured |
+| `gar_logged_in` | `true` if GAR login was performed, `false` otherwise |
+| `kubectl_context` | Kubernetes context name |
 
 ## Examples
 
@@ -117,6 +118,58 @@ Authenticates to Google Cloud Platform and configures kubectl for GKE clusters.
     project_id: my-project
     location: us-central1
     # No cluster_name - just GCP auth
+```
+
+### GAR Only (No GKE)
+```yaml
+- name: GCP with GAR only
+  uses: KoalaOps/login-gcp-gke@v1
+  with:
+    workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+    service_account: ${{ vars.WIF_SA }}
+    project_id: my-project
+    location: us-central1  # Required even without GKE
+    gar_location: europe  # Multi-regional GAR
+    skip_gar_login: false
+    # No cluster_name - just GAR login
+
+- name: Push to European multi-regional GAR
+  run: |
+    docker build -t europe-docker.pkg.dev/my-project/images/app:latest .
+    docker push europe-docker.pkg.dev/my-project/images/app:latest
+```
+
+### Multiple Clusters (Matrix)
+```yaml
+jobs:
+  deploy:
+    strategy:
+      matrix:
+        cluster:
+          - name: prod-us
+            location: us-central1
+          - name: prod-eu
+            location: europe-west1
+          - name: prod-asia
+            location: asia-northeast1
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Login to GCP and GKE
+        uses: KoalaOps/login-gcp-gke@v1
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SA }}
+          project_id: my-project
+          location: ${{ matrix.cluster.location }}
+          cluster_name: ${{ matrix.cluster.name }}
+
+      - name: Deploy to cluster
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/my-app
 ```
 
 ## Prerequisites
