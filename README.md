@@ -28,8 +28,8 @@ Authenticates to Google Cloud Platform and configures kubectl for GKE clusters.
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `project_id` | GCP project ID | ✅ | - |
-| `location` | GKE cluster location/region | ✅ | - |
-| `cluster_name` | GKE cluster name | ✅ | - |
+| `location` | GKE cluster location (region or zone, e.g. `us-central1` or `us-central1-a`) | ✅ | - |
+| `cluster_name` | GKE cluster name | ❌ | - |
 | `workload_identity_provider` | WIF provider | ❌* | - |
 | `service_account` | Service account email | ❌* | - |
 | `credentials_json` | Service account JSON key | ❌* | - |
@@ -146,9 +146,107 @@ permissions:
   contents: read
 ```
 
+## Google Artifact Registry (GAR) Endpoints
+
+### Multi-Regional vs Regional Repositories
+
+| Location Type | Example Values | Registry URL | Use Case |
+|--------------|----------------|--------------|----------|
+| Multi-regional | `us`, `europe`, `asia` | `{location}-docker.pkg.dev` | Lower latency across regions |
+| Regional | `us-central1`, `europe-west1` | `{location}-docker.pkg.dev` | Single region compliance |
+| Zonal* | `us-central1-a` | `{zone%-?}-docker.pkg.dev` | Converted to regional |
+
+*Zones are automatically converted to their parent region for GAR (e.g., `us-central1-a` → `us-central1-docker.pkg.dev`)
+
+### How the Action Determines Registry Host
+
+1. If `gar_location` is provided, use that
+2. Otherwise, use the `location` parameter
+3. Always format as `{location}-docker.pkg.dev` (works for both multi-regional and regional)
+
+## GKE Cluster Location Support
+
+### Regional vs Zonal Clusters
+
+- **Regional clusters** (e.g., `location: us-central1`): High availability across multiple zones
+- **Zonal clusters** (e.g., `location: us-central1-a`): Single zone, lower cost
+
+The action automatically detects the location type and uses the appropriate `gcloud` commands.
+
+## Using Outputs
+
+### Example: Using the outputs in subsequent steps
+
+```yaml
+- name: Login to GCP and GKE
+  id: gcp
+  uses: KoalaOps/login-gcp-gke@v1
+  with:
+    workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+    service_account: ${{ vars.WIF_SA }}
+    project_id: my-project
+    location: us-central1
+    cluster_name: production
+
+- name: Use outputs
+  run: |
+    echo "Project: ${{ steps.gcp.outputs.project_id }}"
+    echo "Context: ${{ steps.gcp.outputs.kubectl_context }}"
+    echo "Registry: ${{ steps.gcp.outputs.gar_registry }}"
+
+    # Push to the registry
+    docker build -t ${{ steps.gcp.outputs.gar_registry }}/my-app:latest .
+    docker push ${{ steps.gcp.outputs.gar_registry }}/my-app:latest
+
+    # Deploy to the cluster
+    kubectl --context=${{ steps.gcp.outputs.kubectl_context }} apply -f k8s/
+```
+
+## Troubleshooting
+
+### Workload Identity Federation (WIF) Errors
+
+#### "Unable to acquire impersonation credentials"
+
+Check your Workload Identity Pool configuration:
+
+```bash
+gcloud iam workload-identity-pools providers describe github \
+  --workload-identity-pool=github \
+  --location=global
+```
+
+Verify the attribute mappings include:
+- `google.subject` → `assertion.sub`
+- `attribute.repository` → `assertion.repository`
+
+#### "Permission denied on resource"
+
+Ensure your service account binding is correct:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  YOUR-SA@PROJECT.iam.gserviceaccount.com \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/attribute.repository/ORG/REPO"
+```
+
+#### "Resource not found"
+
+Common causes:
+- Incorrect `workload_identity_provider` format
+- Pool or provider doesn't exist
+- Wrong project number in the provider string
+
+Correct format:
+```
+projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/{POOL}/providers/{PROVIDER}
+```
+
 ## Notes
 
 - Workload Identity is more secure than service account keys
-- GAR login configures Docker for the appropriate regional registry
+- GAR login configures Docker for the appropriate registry endpoint
 - Works with both regional and zonal GKE clusters
 - Compatible with Autopilot and Standard GKE clusters
+- GCP-only mode (no cluster) still configures GAR if requested
